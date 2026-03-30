@@ -1,133 +1,178 @@
 /**
- * Terra Nova — Wholesale Order Logger + Mailer
- * Paste this into Google Apps Script (Extensions → Apps Script),
- * then deploy as a Web App:
- *   Execute as: Me
- *   Who has access: Anyone
+ * Terra Nova — Wholesale Order Logger + Mailer + Product Inventory
  *
- * Sheet columns (auto-created on first order):
- *   Date | Order ID | Product | SKU | Barcode |
- *   Displays | Pairs | Wholesale/Unit | Line Wholesale | SRP/Unit | Line SRP
+ * Deploy as Web App:  Execute as: Me  |  Who has access: Anyone
+ *
+ * Routes (all via GET + ?action=...):
+ *   getProducts    — returns Products sheet as JSON array
+ *   saveProducts   — writes payload JSON to Products sheet
+ *   submitOrder    — logs order to Orders sheet + sends email  (default)
  */
 
-const ORDER_EMAIL = 'mtlaibaker@gmail.com';
-const SHEET_NAME  = 'Orders';
+const ORDER_EMAIL     = 'mtlaibaker@gmail.com';
+const ORDERS_SHEET    = 'Orders';
+const PRODUCTS_SHEET  = 'Products';
 
+/* ── Router ──────────────────────────────────────────────── */
 function doGet(e) {
+  const action = (e.parameter && e.parameter.action) || 'submitOrder';
   try {
-    const data  = JSON.parse(e.parameter.payload);
-    const ss    = SpreadsheetApp.getActiveSpreadsheet();
-    let   sheet = ss.getSheetByName(SHEET_NAME);
-
-    // Create sheet tab if it doesn't exist
-    if (!sheet) {
-      sheet = ss.insertSheet(SHEET_NAME);
-    }
-
-    // Write header row if sheet is empty
-    if (sheet.getLastRow() === 0) {
-      sheet.appendRow([
-        'Date', 'Order ID', 'Product', 'SKU', 'Barcode',
-        'Order Unit', 'Order Qty', 'Total Units', 'Wholesale/Unit ($)', 'Line Wholesale ($)',
-        'SRP/Unit ($)', 'Line SRP ($)',
-      ]);
-      sheet.getRange(1, 1, 1, 12).setFontWeight('bold');
-      sheet.setFrozenRows(1);
-    }
-
-    // Append one row per line item
-    data.lines.forEach(function (line) {
-      sheet.appendRow([
-        data.date,
-        data.orderId,
-        line.name,
-        line.sku,
-        line.barcode,
-        line.orderUnit,
-        line.qty,
-        line.units,
-        line.wholesaleUnit,
-        line.lineWholesale,
-        line.srpUnit,
-        line.lineSRP,
-      ]);
-    });
-
-    // Append a totals summary row for this order
-    const totalsRow = [
-      data.date,
-      data.orderId + ' — TOTAL',
-      '— ' + data.lines.length + ' product(s) —',
-      '', '', '',
-      data.totalOrderUnits,
-      data.totalIndividualUnits,
-      '',
-      data.totalWholesale,
-      '',
-      data.totalRetail,
-    ];
-    sheet.appendRow(totalsRow);
-    sheet.getRange(sheet.getLastRow(), 1, 1, 12)
-         .setFontStyle('italic')
-         .setBackground('#f0f4f8');
-
-    // ── Send email ──────────────────────────────────────────
-    sendOrderEmail(data);
-
-    return ContentService
-      .createTextOutput(JSON.stringify({ status: 'ok', orderId: data.orderId }))
-      .setMimeType(ContentService.MimeType.JSON);
-
+    if      (action === 'getProducts')  return handleGetProducts();
+    else if (action === 'saveProducts') return handleSaveProducts(e);
+    else                                return handleSubmitOrder(e);
   } catch (err) {
-    return ContentService
-      .createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))
-      .setMimeType(ContentService.MimeType.JSON);
+    return json({ status: 'error', message: err.toString() });
   }
 }
 
+/* ── Products: read ──────────────────────────────────────── */
+function handleGetProducts() {
+  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(PRODUCTS_SHEET);
+
+  if (!sheet || sheet.getLastRow() < 2) {
+    return json([]);
+  }
+
+  const rows    = sheet.getDataRange().getValues();
+  const headers = rows[0];
+  const products = rows.slice(1)
+    .filter(r => r[0] !== '')
+    .map(r => {
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = r[i]; });
+      return obj;
+    });
+
+  return json(products);
+}
+
+/* ── Products: write ─────────────────────────────────────── */
+function handleSaveProducts(e) {
+  const products = JSON.parse(e.parameter.payload);
+  const ss       = SpreadsheetApp.getActiveSpreadsheet();
+  let   sheet    = ss.getSheetByName(PRODUCTS_SHEET);
+
+  if (!sheet) {
+    sheet = ss.insertSheet(PRODUCTS_SHEET);
+  }
+
+  sheet.clearContents();
+  const headers = ['id','name','barcode','sku','srp','wholesale','img','orderUnit','unitsPerOrder','unitLabel'];
+  sheet.appendRow(headers);
+  sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+  sheet.setFrozenRows(1);
+
+  products.forEach(function(p) {
+    sheet.appendRow([
+      p.id, p.name, p.barcode, p.sku,
+      Number(p.srp), Number(p.wholesale),
+      p.img, p.orderUnit, Number(p.unitsPerOrder), p.unitLabel,
+    ]);
+  });
+
+  return json({ status: 'ok', saved: products.length });
+}
+
+/* ── Orders: submit + email ──────────────────────────────── */
+function handleSubmitOrder(e) {
+  const data  = JSON.parse(e.parameter.payload);
+  const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  let   sheet = ss.getSheetByName(ORDERS_SHEET);
+
+  if (!sheet) {
+    sheet = ss.insertSheet(ORDERS_SHEET);
+  }
+
+  if (sheet.getLastRow() === 0) {
+    const headers = [
+      'Date','Order ID','Product','SKU','Barcode',
+      'Order Unit','Order Qty','Total Units',
+      'Wholesale/Unit ($)','Line Wholesale ($)',
+      'SRP/Unit ($)','Line SRP ($)',
+    ];
+    sheet.appendRow(headers);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+
+  data.lines.forEach(function(line) {
+    sheet.appendRow([
+      data.date, data.orderId,
+      line.name, line.sku, line.barcode,
+      line.orderUnit, line.qty, line.units,
+      line.wholesaleUnit, line.lineWholesale,
+      line.srpUnit,       line.lineSRP,
+    ]);
+  });
+
+  // Totals summary row
+  sheet.appendRow([
+    data.date, data.orderId + ' — TOTAL',
+    '— ' + data.lines.length + ' product(s) —',
+    '','','',
+    data.totalOrderUnits, data.totalIndividualUnits,
+    '', data.totalWholesale,
+    '', data.totalRetail,
+  ]);
+  sheet.getRange(sheet.getLastRow(), 1, 1, 12)
+       .setFontStyle('italic')
+       .setBackground('#f0f4f8');
+
+  sendOrderEmail(data);
+  return json({ status: 'ok', orderId: data.orderId });
+}
+
+/* ── Email ───────────────────────────────────────────────── */
 function sendOrderEmail(data) {
-  const rows = data.lines.map(function (line) {
+  const rows = data.lines.map(function(line) {
     return '<tr>'
-      + '<td style="padding:8px 12px;border-bottom:1px solid #e2e8f0">' + line.name + '</td>'
-      + '<td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;text-align:center">' + line.qty + '</td>'
-      + '<td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;text-align:center">' + line.pairs + '</td>'
-      + '<td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;text-align:right">$' + line.lineWholesale.toFixed(2) + '</td>'
+      + td(line.name)
+      + td(line.qty + ' ' + line.orderUnit + (line.qty !== 1 ? 's' : ''), 'center')
+      + td(line.units + ' ' + (line.unitLabel || 'units'), 'center')
+      + td('$' + line.lineWholesale.toFixed(2), 'right')
       + '</tr>';
   }).join('');
 
-  const htmlBody = ''
-    + '<div style="font-family:sans-serif;max-width:600px;color:#1a202c">'
-    + '  <div style="background:#1e3a5f;padding:20px 24px">'
-    + '    <h1 style="color:#fff;margin:0;font-size:1.3rem">Terra Nova — New Wholesale Order</h1>'
-    + '  </div>'
-    + '  <div style="padding:24px">'
-    + '    <p style="color:#718096;margin:0 0 20px">Order ID: <strong>' + data.orderId + '</strong> &nbsp;·&nbsp; Date: ' + data.date + '</p>'
-    + '    <table style="width:100%;border-collapse:collapse">'
-    + '      <thead>'
-    + '        <tr style="background:#f0f4f8">'
-    + '          <th style="padding:8px 12px;text-align:left;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Product</th>'
-    + '          <th style="padding:8px 12px;text-align:center;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Displays</th>'
-    + '          <th style="padding:8px 12px;text-align:center;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Pairs</th>'
-    + '          <th style="padding:8px 12px;text-align:right;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">Line Total</th>'
-    + '        </tr>'
-    + '      </thead>'
-    + '      <tbody>' + rows + '</tbody>'
-    + '    </table>'
-    + '    <div style="margin-top:20px;background:#f0f4f8;border-radius:6px;padding:14px 16px">'
-    + '      <table style="width:100%">'
-    + '        <tr><td style="color:#718096">Total Displays</td><td style="text-align:right;font-weight:700">' + data.totalDisplays + '</td></tr>'
-    + '        <tr><td style="color:#718096">Total Pairs</td><td style="text-align:right;font-weight:700">' + data.totalPairs + '</td></tr>'
-    + '        <tr><td style="color:#718096">Wholesale Total</td><td style="text-align:right;font-weight:700">$' + data.totalWholesale.toFixed(2) + '</td></tr>'
-    + '        <tr><td style="color:#2d9c5e;font-weight:600">Retail Value (SRP)</td><td style="text-align:right;font-weight:700;color:#2d9c5e">$' + data.totalRetail.toFixed(2) + '</td></tr>'
-    + '      </table>'
-    + '    </div>'
-    + '  </div>'
-    + '</div>';
+  const html = ''
+    + '<div style="font-family:sans-serif;max-width:620px;color:#1a202c">'
+    + '<div style="background:#1e3a5f;padding:20px 24px">'
+    + '<h1 style="color:#fff;margin:0;font-size:1.3rem">Terra Nova — New Wholesale Order</h1>'
+    + '</div>'
+    + '<div style="padding:24px">'
+    + '<p style="color:#718096;margin:0 0 16px">Order <strong>' + data.orderId + '</strong> &nbsp;·&nbsp; ' + data.date + '</p>'
+    + '<table style="width:100%;border-collapse:collapse">'
+    + '<thead><tr style="background:#f0f4f8">'
+    + th('Product') + th('Order Qty') + th('Total Units') + th('Line Total', 'right')
+    + '</tr></thead>'
+    + '<tbody>' + rows + '</tbody>'
+    + '</table>'
+    + '<div style="margin-top:20px;background:#f0f4f8;border-radius:6px;padding:14px 16px">'
+    + row2('Total Order Units',      data.totalOrderUnits)
+    + row2('Total Individual Units', data.totalIndividualUnits)
+    + row2('Wholesale Total',        '$' + data.totalWholesale.toFixed(2))
+    + row2('Retail Value (SRP)',     '$' + data.totalRetail.toFixed(2), '#2d9c5e')
+    + '</div>'
+    + '</div></div>';
 
-  MailApp.sendEmail({
-    to:       ORDER_EMAIL,
-    subject:  'New Terra Nova Order — ' + data.orderId,
-    htmlBody: htmlBody,
-  });
+  MailApp.sendEmail({ to: ORDER_EMAIL, subject: 'New Terra Nova Order — ' + data.orderId, htmlBody: html });
 }
 
+/* ── Helpers ─────────────────────────────────────────────── */
+function json(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+function th(text, align) {
+  return '<th style="padding:8px 12px;text-align:' + (align||'left') + ';font-size:.75rem;text-transform:uppercase;letter-spacing:.05em">' + text + '</th>';
+}
+function td(text, align) {
+  return '<td style="padding:8px 12px;border-bottom:1px solid #e2e8f0;text-align:' + (align||'left') + '">' + text + '</td>';
+}
+function row2(label, value, color) {
+  return '<div style="display:flex;justify-content:space-between;margin-bottom:6px">'
+    + '<span style="color:#718096">' + label + '</span>'
+    + '<strong style="color:' + (color||'#1a202c') + '">' + value + '</strong>'
+    + '</div>';
+}

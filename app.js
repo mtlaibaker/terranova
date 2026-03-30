@@ -14,7 +14,7 @@ const SHEETS_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbyLHoKCqkTmz
    The description shown on the row is auto-generated:
      "1 {orderUnit} = {unitsPerOrder} {unitLabel}"
    ============================================================ */
-const products = [
+let products = [
   {
     id: 1,
     name: 'Bacon Socks',
@@ -183,8 +183,8 @@ function updateSummary() {
   const listHTML = activeItems.map(p => {
     const qty   = order[p.id];
     const units = qty * p.unitsPerOrder;
-    const lineW = qty * p.wholesale;
-    const lineS = qty * p.srp;
+    const lineW = qty * p.unitsPerOrder * p.wholesale;
+    const lineS = qty * p.unitsPerOrder * p.srp;
     totalOrderUnits      += qty;
     totalIndividualUnits += units;
     totalWholesale       += lineW;
@@ -287,8 +287,8 @@ function buildOrderData() {
     const qty = order[p.id] || 0;
     if (!qty) return;
     const units = qty * p.unitsPerOrder;
-    const lineW = qty * p.wholesale;
-    const lineS = qty * p.srp;
+    const lineW = qty * p.unitsPerOrder * p.wholesale;
+    const lineS = qty * p.unitsPerOrder * p.srp;
     totalOrderUnits      += qty;
     totalIndividualUnits += units;
     totalWholesale       += lineW;
@@ -318,7 +318,7 @@ function buildDialogBodyHTML({ lines, totalOrderUnits, totalIndividualUnits, tot
           <th>SKU</th>
           <th style="text-align:center">Order Qty</th>
           <th style="text-align:center">Total Units</th>
-          <th style="text-align:right">Unit Price</th>
+          <th style="text-align:right">Price / Unit</th>
           <th style="text-align:right">Line Total</th>
         </tr>
       </thead>
@@ -571,7 +571,25 @@ document.getElementById('lightboxClose').addEventListener('click', () => lightbo
 lightbox.addEventListener('click', e => { if (e.target === lightbox) lightbox.close(); });
 
 /* ============================================================
-   INIT
+   INIT — load products from sheet, fall back to defaults
    ============================================================ */
-renderProducts();
-updateSummary();
+async function init() {
+  try {
+    const res  = await fetch(`${SHEETS_WEBHOOK_URL}?action=getProducts`);
+    const data = await res.json();
+    if (Array.isArray(data) && data.length > 0) {
+      products = data.map(p => ({
+        ...p,
+        id:            Number(p.id),
+        srp:           Number(p.srp),
+        wholesale:     Number(p.wholesale),
+        unitsPerOrder: Number(p.unitsPerOrder),
+      }));
+    }
+  } catch (_) {
+    // Sheet unavailable — use hardcoded defaults above
+  }
+  renderProducts();
+  updateSummary();
+}
+init();
