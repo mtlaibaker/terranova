@@ -12,6 +12,31 @@
 const ORDER_EMAIL     = 'mtlaibaker@gmail.com';
 const ORDERS_SHEET    = 'Orders';
 const PRODUCTS_SHEET  = 'Products';
+const COUNTER_SHEET   = 'Counter';
+
+/* ── Order ID generator (persistent counter) ─────────────── */
+function getNextOrderId() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let counterSheet = ss.getSheetByName(COUNTER_SHEET);
+  if (!counterSheet) {
+    counterSheet = ss.insertSheet(COUNTER_SHEET);
+    counterSheet.getRange('A1').setValue(0);
+  }
+  const cell  = counterSheet.getRange('A1');
+  const count = Number(cell.getValue()) + 1;
+  cell.setValue(count);
+
+  const now  = new Date();
+  const pad  = function(n, w) { return String(n).padStart(w, '0'); };
+  const yyyy = now.getFullYear();
+  const mo   = pad(now.getMonth() + 1, 2);
+  const dd   = pad(now.getDate(), 2);
+  const hh   = pad(now.getHours(), 2);
+  const min  = pad(now.getMinutes(), 2);
+  const seq  = pad(count, 4);
+
+  return 'TN-' + yyyy + mo + dd + '-' + hh + min + '-' + seq;
+}
 
 /* ── Router ──────────────────────────────────────────────── */
 function doGet(e) {
@@ -76,7 +101,11 @@ function handleSaveProducts(e) {
 
 /* ── Orders: submit + email ──────────────────────────────── */
 function handleSubmitOrder(e) {
-  const data  = JSON.parse(e.parameter.payload);
+  const data    = JSON.parse(e.parameter.payload);
+  const orderId = getNextOrderId();
+  const date    = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+  data.orderId  = orderId;
+  data.date     = date;
   const ss    = SpreadsheetApp.getActiveSpreadsheet();
   let   sheet = ss.getSheetByName(ORDERS_SHEET);
 

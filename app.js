@@ -382,16 +382,22 @@ document.getElementById('btnConfirmSubmit').addEventListener('click', async () =
   document.querySelectorAll('tr[data-id]').forEach(r => r.classList.remove('in-order'));
   updateSummary();
 
-  // Log to Google Sheets + trigger email (non-blocking)
+  // Log to Google Sheets + trigger email; get server-assigned order ID
+  let orderId = null;
   try {
-    await submitToGoogleSheet(confirmedOrder);
+    orderId = await submitToGoogleSheet(confirmedOrder);
   } catch (err) {
     console.error('Submission error:', err);
   }
+  if (orderId) confirmedOrder.orderId = orderId;
 
   // Switch dialog to Confirmed state
   document.getElementById('dialogTitle').textContent = 'Order Submitted';
-  document.getElementById('dialogSuccess').hidden    = false;
+  const successEl = document.getElementById('dialogSuccess');
+  successEl.innerHTML = '<span class="success-icon">&#10003;</span> '
+    + (orderId ? 'Order <strong>' + orderId + '</strong> confirmed' : 'Order confirmed')
+    + ' — a confirmation has been sent to mtlaibaker@gmail.com';
+  successEl.hidden    = false;
   document.getElementById('footReview').hidden       = true;
   document.getElementById('footConfirmed').hidden    = false;
 });
@@ -404,13 +410,8 @@ document.getElementById('btnNewOrder').addEventListener('click', () => {
 /* ============================================================
    GOOGLE SHEETS LOGGING + EMAIL (via Apps Script)
    ============================================================ */
-function submitToGoogleSheet(data) {
-  const orderId = `TN-${Date.now()}`;
-  const date    = new Date().toLocaleString('en-CA');
-
+async function submitToGoogleSheet(data) {
   const payload = {
-    orderId,
-    date,
     lines: data.lines.map(({ p, qty, units, lineW, lineS }) => ({
       name:          p.name,
       sku:           p.sku,
@@ -432,7 +433,9 @@ function submitToGoogleSheet(data) {
   // Use GET + URL params — POST bodies are silently dropped by Google's
   // 302 redirect, but URL params survive it. This is the reliable approach.
   const url = SHEETS_WEBHOOK_URL + '?payload=' + encodeURIComponent(JSON.stringify(payload));
-  return fetch(url, { mode: 'no-cors' });
+  const res  = await fetch(url);
+  const json = await res.json();
+  return json.orderId || null;
 }
 
 /* ============================================================
@@ -460,7 +463,7 @@ document.getElementById('btnCSV').addEventListener('click', () => {
   const url  = URL.createObjectURL(blob);
   const a    = Object.assign(document.createElement('a'), {
     href: url,
-    download: `terranova-order-${new Date().toISOString().slice(0, 10)}.csv`,
+    download: `terranova-order-${confirmedOrder.orderId || new Date().toISOString().slice(0, 10)}.csv`,
   });
   document.body.appendChild(a);
   a.click();
@@ -522,7 +525,7 @@ document.getElementById('btnPrint').addEventListener('click', () => {
     <img class="logo" src="${logoURL}" alt="Terra Nova"/>
     <div>
       <h1>Wholesale Order Summary</h1>
-      <p class="meta">Date: ${date}</p>
+      <p class="meta">${confirmedOrder.orderId ? 'Order: ' + confirmedOrder.orderId + ' &nbsp;·&nbsp; ' : ''}Date: ${date}</p>
     </div>
   </div>
   <table>
