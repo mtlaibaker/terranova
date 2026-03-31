@@ -85,7 +85,7 @@ function handleSaveProducts(e) {
   }
 
   sheet.clearContents();
-  const headers = ['id','name','barcode','sku','srp','wholesale','img','orderUnit','unitsPerOrder','unitLabel'];
+  const headers = ['id','name','barcode','sku','srp','wholesale','img','orderUnit','unitsPerOrder','unitLabel','available','totalInventory'];
   sheet.appendRow(headers);
   sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
   sheet.setFrozenRows(1);
@@ -95,6 +95,7 @@ function handleSaveProducts(e) {
       p.id, p.name, p.barcode, p.sku,
       Number(p.srp), Number(p.wholesale),
       p.img, p.orderUnit, Number(p.unitsPerOrder), p.unitLabel,
+      p.available !== false, Number(p.totalInventory) || 0,
     ]);
   });
 

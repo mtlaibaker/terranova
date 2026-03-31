@@ -145,6 +145,23 @@
     }
     .btn-del:hover { color: var(--red); }
 
+    /* availability toggle */
+    .btn-avail {
+      border: none; border-radius: 4px; padding: 5px 10px;
+      font-size: .75rem; font-weight: 700; cursor: pointer;
+      white-space: nowrap; transition: background .12s, color .12s;
+    }
+    .btn-avail.available   { background: #e8f8ef; color: var(--green); }
+    .btn-avail.unavailable { background: #fff5f5; color: var(--red);   }
+
+    /* inventory stats cells */
+    .inv-stat { text-align: center; font-size: .85rem; font-weight: 700; }
+    .inv-stat.low  { color: var(--amber); }
+    .inv-stat.out  { color: var(--red);   }
+    .inv-stat.ok   { color: var(--green); }
+    td input[type="number"].f-totalInventory { width: 70px; }
+    tr.unavailable-row { opacity: .55; }
+
     /* ── Status bar ── */
     .status-bar {
       margin-top: 16px; padding: 10px 16px; border-radius: 6px;
@@ -259,6 +276,10 @@
                 <th>Order Unit</th>
                 <th>Units / Order</th>
                 <th>Unit Label</th>
+                <th>Status</th>
+                <th>Total Inventory</th>
+                <th>Ordered</th>
+                <th>Remaining</th>
                 <th></th>
               </tr>
             </thead>
@@ -376,17 +397,40 @@
     /* ════════════════════════════════════════════════════════
        PRODUCTS
     ════════════════════════════════════════════════════════ */
+    // Units ordered per product name (from non-cancelled orders)
+    let orderedStats = {};
+
+    async function loadOrderStats() {
+      try {
+        const res    = await fetch(`${WEBHOOK}?action=getOrders`);
+        const orders = await res.json();
+        const stats  = {};
+        (Array.isArray(orders) ? orders : [])
+          .filter(o => !o.cancelled)
+          .forEach(o => o.lines.forEach(l => {
+            stats[l.name] = (stats[l.name] || 0) + Number(l.units);
+          }));
+        return stats;
+      } catch (_) { return {}; }
+    }
+
     async function loadProducts() {
       setStatus('loading', 'Loading products from sheet…');
       try {
-        const res  = await fetch(`${WEBHOOK}?action=getProducts`);
-        const data = await res.json();
+        const [prodRes, stats] = await Promise.all([
+          fetch(`${WEBHOOK}?action=getProducts`),
+          loadOrderStats(),
+        ]);
+        orderedStats = stats;
+        const data     = await prodRes.json();
         const products = (Array.isArray(data) && data.length > 0) ? data : DEFAULTS;
         renderTable(products.map(p => ({
           ...p,
-          srp:           Number(p.srp),
-          wholesale:     Number(p.wholesale),
-          unitsPerOrder: Number(p.unitsPerOrder),
+          srp:            Number(p.srp),
+          wholesale:      Number(p.wholesale),
+          unitsPerOrder:  Number(p.unitsPerOrder),
+          totalInventory: Number(p.totalInventory) || 0,
+          available:      p.available !== false && p.available !== 'false' && p.available !== 'FALSE',
         })));
         setStatus('success', data.length > 0
           ? `Loaded ${data.length} products from sheet.`
@@ -404,8 +448,15 @@
     }
 
     function makeRow(p, idx) {
+      const avail    = p.available !== false;
+      const ordered  = orderedStats[p.name] || 0;
+      const total    = Number(p.totalInventory) || 0;
+      const remaining = total - ordered;
+      const remClass  = total === 0 ? '' : remaining <= 0 ? 'out' : remaining <= total * 0.2 ? 'low' : 'ok';
+
       const tr = document.createElement('tr');
       tr.dataset.idx = idx;
+      if (!avail) tr.classList.add('unavailable-row');
       tr.innerHTML = `
         <td class="col-img">
           <img src="${p.img}" alt="" onerror="this.src='images/image1.png'" />
@@ -426,6 +477,14 @@
         </td>
         <td><input type="number" class="f-unitsPerOrder" value="${p.unitsPerOrder}" min="1" step="1" /></td>
         <td><input type="text"   class="f-unitLabel"     value="${p.unitLabel}"     /></td>
+        <td>
+          <button class="btn-avail f-available ${avail ? 'available' : 'unavailable'}"
+                  onclick="toggleAvail(this)">${avail ? 'Available' : 'Unavailable'}</button>
+        </td>
+        <td><input type="number" class="f-totalInventory" value="${total}" min="0" step="1"
+                   oninput="updateRemainingCell(this)" /></td>
+        <td class="inv-stat">${ordered || '—'}</td>
+        <td class="inv-stat ${remClass}">${total === 0 ? '—' : remaining}</td>
         <td class="col-del">
           <button class="btn-del" title="Remove" onclick="this.closest('tr').remove()">&#215;</button>
         </td>
@@ -433,27 +492,49 @@
       return tr;
     }
 
+    function toggleAvail(btn) {
+      const isAvail = btn.classList.contains('available');
+      btn.classList.toggle('available',   !isAvail);
+      btn.classList.toggle('unavailable',  isAvail);
+      btn.textContent = isAvail ? 'Unavailable' : 'Available';
+      btn.closest('tr').classList.toggle('unavailable-row', isAvail);
+    }
+
+    function updateRemainingCell(input) {
+      const tr        = input.closest('tr');
+      const name      = tr.querySelector('.f-name').value.trim();
+      const ordered   = orderedStats[name] || 0;
+      const total     = parseInt(input.value) || 0;
+      const remaining = total - ordered;
+      const remCell   = tr.querySelectorAll('.inv-stat')[1];
+      remCell.textContent = total === 0 ? '—' : remaining;
+      remCell.className   = 'inv-stat ' + (total === 0 ? '' : remaining <= 0 ? 'out' : remaining <= total * 0.2 ? 'low' : 'ok');
+    }
+
     let nextId = 100;
     function addRow() {
       const tbody = document.getElementById('productBody');
       const blank = { id: nextId++, name:'', barcode:'644197322967', sku:'687 0362',
                       srp:15.99, wholesale:11.90, img:'images/image1.png',
-                      orderUnit:'display', unitsPerOrder:6, unitLabel:'pairs' };
+                      orderUnit:'display', unitsPerOrder:6, unitLabel:'pairs',
+                      available: true, totalInventory: 0 };
       tbody.appendChild(makeRow(blank, tbody.rows.length));
     }
 
     function collectRows() {
       return Array.from(document.querySelectorAll('#productBody tr')).map((tr, i) => ({
-        id:            i + 1,
-        name:          tr.querySelector('.f-name').value.trim(),
-        barcode:       tr.querySelector('.f-barcode').value.trim(),
-        sku:           tr.querySelector('.f-sku').value.trim(),
-        srp:           parseFloat(tr.querySelector('.f-srp').value) || 0,
-        wholesale:     parseFloat(tr.querySelector('.f-wholesale').value) || 0,
-        img:           tr.querySelector('.f-img').value.trim(),
-        orderUnit:     tr.querySelector('.f-orderUnit').value,
-        unitsPerOrder: parseInt(tr.querySelector('.f-unitsPerOrder').value) || 1,
-        unitLabel:     tr.querySelector('.f-unitLabel').value.trim(),
+        id:             i + 1,
+        name:           tr.querySelector('.f-name').value.trim(),
+        barcode:        tr.querySelector('.f-barcode').value.trim(),
+        sku:            tr.querySelector('.f-sku').value.trim(),
+        srp:            parseFloat(tr.querySelector('.f-srp').value) || 0,
+        wholesale:      parseFloat(tr.querySelector('.f-wholesale').value) || 0,
+        img:            tr.querySelector('.f-img').value.trim(),
+        orderUnit:      tr.querySelector('.f-orderUnit').value,
+        unitsPerOrder:  parseInt(tr.querySelector('.f-unitsPerOrder').value) || 1,
+        unitLabel:      tr.querySelector('.f-unitLabel').value.trim(),
+        available:      tr.querySelector('.f-available').classList.contains('available'),
+        totalInventory: parseInt(tr.querySelector('.f-totalInventory').value) || 0,
       })).filter(p => p.name);
     }
 
