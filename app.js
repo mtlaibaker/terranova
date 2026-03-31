@@ -394,9 +394,10 @@ document.getElementById('btnConfirmSubmit').addEventListener('click', async () =
   // Switch dialog to Confirmed state
   document.getElementById('dialogTitle').textContent = 'Order Submitted';
   const successEl = document.getElementById('dialogSuccess');
-  successEl.innerHTML = '<span class="success-icon">&#10003;</span> '
-    + (orderId ? 'Order <strong>' + orderId + '</strong> confirmed' : 'Order confirmed')
-    + ' — a confirmation has been sent to mtlaibaker@gmail.com';
+  successEl.innerHTML = '<span class="success-icon">&#10003;</span>'
+    + (orderId ? ' Order <strong style="white-space:nowrap">' + orderId + '</strong>' : '')
+    + '<br>We have now received your order and will contact you shortly to process.'
+    + '<br>Thank you for your business. &nbsp;—&nbsp; Terra Nova';
   successEl.hidden    = false;
   document.getElementById('footReview').hidden       = true;
   document.getElementById('footConfirmed').hidden    = false;
